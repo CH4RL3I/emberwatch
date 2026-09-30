@@ -1,5 +1,7 @@
 # emberwatch
 
+[![CI](https://github.com/CH4RL3I/emberwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/CH4RL3I/emberwatch/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) ![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
 Real-time industrial fire and smoke detection with temporal alerting, evaluated honestly, including false alarms.
 
 > **Not a certified safety device.** emberwatch is a research and portfolio project. It has not been validated on industrial cameras, is not certified under any fire-detection standard (for example EN 54 or UL 268), and **must not replace certified fire detectors or alarm systems**. Do not rely on it to protect people or property.
