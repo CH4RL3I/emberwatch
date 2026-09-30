@@ -146,7 +146,7 @@ class AlertEngine:
 
     def _growing(self) -> bool:
         a = list(self._area)
-        if len(a) < self.cfg.window:
+        if len(a) < max(self.cfg.window, 2):
             return False
         h = len(a) // 2
         old, new = sum(a[:h]) / h, sum(a[h:]) / (len(a) - h)

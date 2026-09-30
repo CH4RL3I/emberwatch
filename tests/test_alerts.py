@@ -89,3 +89,8 @@ def test_low_score_detections_ignored():
     e = AlertEngine(cfg(fire_thr=0.6))
     weak = [Det("fire", 0.4, (0, 0, 0.5, 0.5))]
     assert run(e, [weak] * 10) == []
+
+
+def test_window_of_one_frame_does_not_crash():
+    e = AlertEngine(cfg(window=1, min_hits=1))
+    assert run(e, [smoke(0.3)] * 3) == [(0, Level.WATCH)]
