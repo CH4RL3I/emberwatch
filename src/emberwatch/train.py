@@ -31,7 +31,7 @@ def train(
         DFireDataset(items, train=True),
         batch_size=batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=1,
         collate_fn=collate,
         drop_last=True,
         persistent_workers=True,
