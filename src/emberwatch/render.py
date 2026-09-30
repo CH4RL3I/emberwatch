@@ -59,84 +59,121 @@ def pr_figure(ev):
 
 def tradeoff_figure(tm):
     fig, axs = plt.subplots(1, 2, figsize=(10, 4))
-    for lv in ("WATCH", "WARNING", "ALARM"):
+    ax = axs[0]
+    for lv, col in (("WARNING", C["WARNING"]),):
         rows = [r for r in tm["sweep"] if r["level"] == lv]
         x = [max(r["fa_per_hour_all"], 0.5) for r in rows]
-        y = [r["recall"] for r in rows]
-        axs[0].plot(x, y, "-o", color=C[lv], label=lv.lower(), ms=4)
+        ax.plot(
+            x,
+            [r["recall"] for r in rows],
+            "-o",
+            color=col,
+            ms=4,
+            label=f"{lv.lower()}: vary window M",
+        )
         if lv == "WARNING":
-            for r, xi, yi in zip(rows, x, y, strict=True):
-                axs[0].annotate(
+            for r, xi in zip(rows, x, strict=True):
+                ax.annotate(
                     f"M={r['window']}",
-                    (xi, yi),
+                    (xi, r["recall"]),
                     textcoords="offset points",
-                    xytext=(4, -10),
+                    xytext=(3, -10),
                     fontsize=7,
                 )
-        axs[1].plot(
-            [r["window"] for r in rows],
-            [r["tta_median_s"] or np.nan for r in rows],
-            "-o",
-            color=C[lv],
-            label=lv.lower(),
-            ms=4,
+    rows = [r for r in tm["thr_sweep"] if r["level"] == "WARNING"]
+    x = [max(r["fa_per_hour_all"], 0.5) for r in rows]
+    ax.plot(
+        x,
+        [r["recall"] for r in rows],
+        "-s",
+        color="#1b6ca8",
+        ms=4,
+        label="warning: vary score threshold (M=6)",
+    )
+    for r, xi in zip(rows, x, strict=True):
+        ax.annotate(
+            f"{r['thr']:.1f}",
+            (xi, r["recall"]),
+            textcoords="offset points",
+            xytext=(3, 4),
+            fontsize=7,
+            color="#1b6ca8",
         )
-    axs[0].set(
+    ax.set(
         xscale="log",
-        xlabel="false-alarm episodes per hour of negative video (log; floor 0.5)",
-        ylabel="clip recall",
-        title="Recall vs false alarms as the persistence window M grows",
+        xlabel="false-alarm episodes per hour of negative video (log axis)",
+        ylabel="clip recall (alert after onset)",
+        title="Recall vs false alarms",
+    )
+    ax.legend(fontsize=7, loc="upper left")
+    rows = [r for r in tm["sweep"] if r["level"] == "WARNING"]
+    axs[1].plot(
+        [r["window"] for r in rows],
+        [r["tta_median_s"] or np.nan for r in rows],
+        "-o",
+        color=C["WARNING"],
+        ms=4,
+        label="median",
+    )
+    axs[1].plot(
+        [r["window"] for r in rows],
+        [r["tta_p90_s"] or np.nan for r in rows],
+        "--o",
+        color="#888",
+        ms=4,
+        label="p90",
     )
     axs[1].set(
-        xlabel="persistence window M (frames, N = ceil(0.67 M))",
-        ylabel="median time-to-alert after onset (s)",
-        title="Cost: delay",
+        xlabel="persistence window M (frames at 2 fps; N = ceil(0.67 M))",
+        ylabel="time-to-alert after onset (s)",
+        title="Cost of a longer window: delay",
     )
-    for a in axs:
-        a.grid(alpha=0.3)
-        a.legend()
-    axs[0].title.set_fontsize(9)
+    axs[1].legend(fontsize=8)
+    for a_ in axs:
+        a_.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(DOCS / "tradeoff.png", dpi=150)
     plt.close(fig)
 
 
 def pick_clips(clips, cfg):
+    """Illustrative pair: a positive clip whose detections start at onset and reach WARNING, and
+    a negative clip with the most raw false-alarm frames that never leaves CLEAR."""
+    thr = {"fire": cfg.fire_thr, "smoke": cfg.smoke_thr}
+
+    def hits(c):
+        return [any(sc >= thr[k] for k, sc, _ in fr) for fr in c["dets"]]
+
     best_pos, best_neg = None, None
     for c in clips:
         _, levels, up = replay(c["dets"], cfg)
+        h = hits(c)
         if c["kind"] == "pos":
-            hit = [i for i, lv in up if lv >= Level.WARNING and i >= c["onset"]]
-            if hit and len(hit) and any(len(d) for d in c["dets"][c["onset"] :]):
-                t = hit[0] - c["onset"]
+            first = [i for i, lv in up if lv >= Level.WARNING and i >= c["onset"]]
+            if first and not any(h[: c["onset"]]):
+                t = first[0] - c["onset"]
                 if best_pos is None or abs(t - 4) < abs(best_pos[1] - 4):
                     best_pos = (c, t)
-        elif c["kind"] != "neg" or True:
-            raw = sum(
-                any(
-                    s >= cfg.fire_thr and k == "fire" or s >= cfg.smoke_thr and k == "smoke"
-                    for k, s, _ in fr
-                )
-                for fr in c["dets"]
-            )
-            if max(levels) < Level.WARNING and (best_neg is None or raw > best_neg[1]):
-                best_neg = (c, raw)
+        elif max(levels) == Level.CLEAR:
+            if best_neg is None or sum(h) > best_neg[1]:
+                best_neg = (c, sum(h))
     return best_pos[0], best_neg[0]
 
 
-def _panel(title, dets, level, onset, i, cfg, w=320):
+def _panel(title, dets_all, levels, onset, i, cfg, w=320):
+    """Canvas with the current frame's boxes plus a timeline: raw detection ticks and level."""
     img = np.full((w, w, 3), 34, np.uint8)
     cv2.rectangle(img, (0, 0), (w - 1, w - 1), (70, 70, 70), 1)
-    for dcls, s, (x1, y1, x2, y2) in dets:
-        thr = cfg.fire_thr if dcls == "fire" else cfg.smoke_thr
-        if s >= thr:
+    thr = {"fire": cfg.fire_thr, "smoke": cfg.smoke_thr}
+    for dcls, sc, (x1, y1, x2, y2) in dets_all[i]:
+        if sc >= thr[dcls]:
             cv2.rectangle(
                 img, (int(x1 * w), int(y1 * w)), (int(x2 * w), int(y2 * w)), COLORS[dcls], 2
             )
             cv2.putText(
                 img,
-                f"{dcls} {s:.2f}",
-                (int(x1 * w), max(int(y1 * w) - 4, 34)),
+                f"{dcls} {sc:.2f}",
+                (int(x1 * w) + 3, min(int(y2 * w) - 5, w - 6)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
                 COLORS[dcls],
@@ -145,19 +182,50 @@ def _panel(title, dets, level, onset, i, cfg, w=320):
             )
     cv2.rectangle(img, (0, 0), (w, 26), (20, 20, 20), -1)
     cv2.putText(img, title, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (230, 230, 230), 1, cv2.LINE_AA)
-    bar = np.full((34, w, 3), 20, np.uint8)
-    cv2.rectangle(bar, (0, 0), (w, 34), LEVEL_COLORS[level], -1)
+    tl = np.full((70, w, 3), 20, np.uint8)
+    n = len(dets_all)
+    step = w / n
+    cv2.putText(
+        tl,
+        "raw detection per frame",
+        (4, 12),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.38,
+        (170, 170, 170),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        tl,
+        "alert level after filter",
+        (4, 44),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.38,
+        (170, 170, 170),
+        1,
+        cv2.LINE_AA,
+    )
+    for t in range(i + 1):
+        hit = any(sc >= thr[c] for c, sc, _ in dets_all[t])
+        x0, x1_ = int(t * step), max(int((t + 1) * step) - 1, int(t * step) + 1)
+        if hit:
+            cv2.rectangle(tl, (x0, 16), (x1_, 32), (0, 120, 255), -1)
+        cv2.rectangle(tl, (x0, 48), (x1_, 66), LEVEL_COLORS[levels[t]], -1)
+    if onset is not None:
+        cv2.line(tl, (int(onset * step), 14), (int(onset * step), 68), (255, 255, 255), 1)
+    bar = np.full((30, w, 3), 20, np.uint8)
+    cv2.rectangle(bar, (0, 0), (w, 30), LEVEL_COLORS[levels[i]], -1)
     cv2.putText(
         bar,
-        f"alert level: {level.name}",
-        (6, 23),
+        f"alert level: {levels[i].name}",
+        (6, 21),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
         (0, 0, 0),
         2,
         cv2.LINE_AA,
     )
-    return np.vstack([img, bar])
+    return np.vstack([img, tl, bar])
 
 
 def hero_gif(clips, cfg):
@@ -167,20 +235,15 @@ def hero_gif(clips, cfg):
     frames = []
     for i in range(N_FRAMES):
         a = _panel(
-            f"positive clip  t={i / SIM_FPS:4.1f}s" + ("  (onset)" if i == pos["onset"] else ""),
-            pos["dets"][i],
-            lp[i],
-            pos["onset"],
-            i,
-            cfg,
+            "positive clip (fire/smoke starts at line)", pos["dets"], lp, pos["onset"], i, cfg
         )
-        b = _panel(f"hard negative  t={i / SIM_FPS:4.1f}s", neg["dets"][i], ln[i], None, i, cfg)
+        b = _panel("negative clip (no fire or smoke)", neg["dets"], ln, None, i, cfg)
         sep = np.full((a.shape[0], 8, 3), 12, np.uint8)
-        foot = np.full((34, a.shape[1] * 2 + 8, 3), 12, np.uint8)
+        foot = np.full((30, a.shape[1] * 2 + 8, 3), 12, np.uint8)
         cv2.putText(
             foot,
-            "raw per-frame boxes (threshold) vs alert level after persistence filter",
-            (6, 22),
+            f"t = {i / SIM_FPS:4.1f} s   boxes: detector output, no dataset pixels shown",
+            (6, 20),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
             (200, 200, 200),
@@ -298,6 +361,19 @@ def results_md(ev, tm, bench, train_log, n_counts):
             s.append(
                 f"| {r['window']} | {r['min_hits']} | {r['recall']:.3f} | {r['fa_per_hour_all']:.1f} | "
                 f"{fmt(r['tta_median_s'], 1)} | {fmt(r['tta_p90_s'], 1)} |"
+            )
+    s += [
+        "",
+        "### Score-threshold sweep (warning level, M=6, N=4)",
+        "",
+        "| threshold (both classes) | recall | false-alarm episodes / h | median time-to-alert (s) |",
+        "|---|---|---|---|",
+    ]
+    for r in tm["thr_sweep"]:
+        if r["level"] == "WARNING":
+            s.append(
+                f"| {r['thr']:.1f} | {r['recall']:.3f} | {r['fa_per_hour_all']:.1f} | "
+                f"{fmt(r['tta_median_s'], 1)} |"
             )
     s += ["", "![trade-off](tradeoff.png)", "", "![PR curves](pr_curves.png)", ""]
     if bench:

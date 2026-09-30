@@ -15,6 +15,7 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--resume", action="store_true")
     e = sub.add_parser("eval", help="mAP, operating point, false alarms, temporal simulation")
     e.add_argument("--limit", type=int, default=None, help="evaluate only the first N images")
+    e.add_argument("--temporal-only", action="store_true", help="reuse cached detections")
     e.add_argument("--skip-temporal", action="store_true")
     e.add_argument("--rebuild-clips", action="store_true")
     w = sub.add_parser("watch", help="real-time detection + alerting on a video file or webcam")
@@ -44,7 +45,8 @@ def main(argv: list[str] | None = None) -> None:
     elif a.cmd == "eval":
         from .evaluate import run_eval
 
-        run_eval(a.limit)
+        if not a.temporal_only:
+            run_eval(a.limit)
         if not a.skip_temporal:
             from .temporal import run_temporal
 
@@ -61,4 +63,4 @@ def main(argv: list[str] | None = None) -> None:
     elif a.cmd == "render":
         from .render import render
 
-        render()
+        render(a.bench_video)

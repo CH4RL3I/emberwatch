@@ -217,6 +217,12 @@ def run_temporal(rebuild: bool = False, n_pos: int = 150, n_neg: int = 120) -> d
     default = replace(base, window=6, min_hits=4, alarm_hold=6)
     for lv in (Level.WATCH, Level.WARNING, Level.ALARM):
         res["levels"][lv.name] = summarise(clips, default, lv)
+    # threshold sweep at the default window: the other axis of the trade-off
+    res["thr_sweep"] = []
+    for t in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9):
+        c = replace(default, fire_thr=t, smoke_thr=t)
+        for lv in (Level.WARNING, Level.ALARM):
+            res["thr_sweep"].append({"thr": t, "level": lv.name, **summarise(clips, c, lv)})
     # ablation: growth check disabled (smoke alone can then only reach WATCH)
     res["no_growth"] = summarise(clips, replace(default, growth_ratio=1e9), Level.WARNING)
     res["default"] = {"window": 6, "min_hits": 4}
